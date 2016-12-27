@@ -1,0 +1,232 @@
+
+Load packages.
+
+```{r}
+library(tm)
+library(wordcloud)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+```
+
+Load data.
+
+```{r}
+df <- read.csv("yelp.csv")
+```
+
+Summary statistics.
+
+Histogram.
+
+```{r}
+ggplot(df, aes(stars)) + geom_histogram(group=1, fill='red') + ggtitle('Yelp Ratings') + labs(x='Stars', y='Frequency')
+```
+
+Average reviews per restaurant.
+
+```{r}
+grouped <- as.data.frame(table(df$business_id))
+mean(grouped$Freq)
+```
+
+Average reviews per user.
+
+```{r}
+grouped <- as.data.frame(table(df$user_id))
+mean(grouped$Freq)
+```
+
+Impact on lunch restaurants on review volume.
+
+```{r}
+table(df$GoodforLunch)
+```
+
+Impact on lunch restaurants on review quality.
+
+```{r}
+df %>% group_by(GoodforLunch) %>% summarise(mean_stars = mean(stars))
+```
+
+Part 2
+
+Convert reviews into text corpus.
+
+```{r}
+corp.original = VCorpus(VectorSource(df$text))
+```
+
+Clean corpus.
+
+```{r}
+corp <- tm_map(corp.original, removePunctuation)
+corp <- tm_map(corp, removeNumbers)
+corp <- tm_map(corp, content_transformer(removeWords), stopwords("SMART"), lazy=TRUE)  
+corp <- tm_map(corp, content_transformer(tolower), lazy=TRUE) 
+corp <- tm_map(corp, content_transformer(removeWords), c("til")) 
+corp <- tm_map(corp, content_transformer(stemDocument), lazy=TRUE) 
+corp <- tm_map(corp, stripWhitespace)
+```
+
+Generate DTM.
+
+```{r}
+dtm = DocumentTermMatrix(corp)
+dtmm <- as.matrix(dtm)
+```
+
+Sum columns.
+
+```{r}
+sums <- as.data.frame(colSums(dtmm, dims=1))
+colnames(sums)[1] <- "Frequency"
+sums$Word <- row.names(sums)
+```
+
+```{r}
+arranged <- arrange(sums, desc(Frequency))
+head(arranged, 15)
+```
+
+Wordcloud.
+
+```{r}
+wordcloud(sums$Word, sums$Frequency, max.words = 100, colors = brewer.pal(6, "Dark2"), random.order = F)
+```
+
+Part 3
+
+Unique terms in dtm.
+
+```{r}
+dim(dtm)
+```
+
+Remove sparse terms.
+
+```{r}
+dtms <-  removeSparseTerms(dtm, .990)
+dtmsm <- as.matrix(dtms)
+```
+
+Calculate correlation matrix.
+
+```{r}
+corr <- cor(as.numeric(df$GoodforLunch), dtmsm)
+corrs <- gather(as.data.frame(corr))
+
+sel_200 <- order(abs(corr),decreasing=T)<=200
+sel_20 <- order(abs(corr),decreasing=T)<=20
+
+subset_200 <- colnames(corr)[sel_200]
+subset_20 <- colnames(corr)[sel_20]
+```
+
+Arrange the corrs dataframe and keep the top 20.
+
+```{r}
+corrs$sign <- ifelse(corrs$value<0, 'n', 'p')
+corrs$color <- ifelse(corrs$sign == 'p', 'blue', 'red')
+corrs$value <- abs(corrs$value)
+top_corrs <- corrs[1:20,]
+```
+
+Wordcloud by correlation strength.
+
+```{r}
+wordcloud(top_corrs$key, top_corrs$value, scale = c(3.5, .35), colors = top_corrs$color, ordered.colors = T, random.order = F)
+```
+
+Part 3B
+
+New DTM with most correlated terms.
+
+```{r}
+predictors <- as.data.frame(cbind(GoodForLunch = df$GoodforLunch, dtmsm[,subset_200]))
+predictors <- mutate(predictors, GoodForLunch = ifelse(GoodForLunch == 1, 0,1))
+```
+
+Split into train/test.
+
+```{r}
+train <- predictors[1:160,]
+test <- predictors[161:200,]
+```
+
+Run logistic regression.
+
+```{r}
+reg <- glm(data=train, GoodForLunch ~ ., family='binomial')
+```
+
+Coefficients.
+
+```{r}
+coefs <- as.data.frame(coef(reg))
+colnames(coefs)[1] <- 'coefficient'
+coefs$word <- row.names(coefs)
+coefs <- filter(coefs, word != '(Intercept)')
+coefs$sign <- ifelse(coefs$coefficient < 0, 'n', 'p')
+coefs$color <- ifelse(coefs$sign == 'p', 'blue', 'red')
+coefs$coefficient <- abs(coefs$coefficient)
+```
+
+```{r}
+top_pos <- coefs %>% filter(sign == 'p') %>% arrange(desc(coefficient)) %>% head(15)
+top_neg <- coefs %>% filter(sign == 'n') %>% arrange(desc(coefficient)) %>% head(15)
+tops <- rbind(top_pos, top_neg)
+```
+
+Wordcloud for positive coefs.
+
+```{r}
+wordcloud(tops$word, tops$coefficient, scale = c(3.5, .35), colors = tops$color, ordered.colors = T, random.order = F)
+```
+
+Prediction accuracy.
+
+```{r}
+train$predictions <- predict(reg, type='response')
+```
+
+```{r}
+train$vs_predicted <- train$predictions > .9
+mean(train$GoodForLunch == train$vs_predicted)
+```
+
+```{r}
+predict(reg, newdata = test, type="response")
+```
+
+
+Predictions in test data.
+
+```{r}
+test$predictions <- predict(reg, newdata = test, type="response")
+test$vs_predicted <- test$predictions > .9
+mean(test$GoodForLunch == test$vs_predicted)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
